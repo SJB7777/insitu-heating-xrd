@@ -8,6 +8,7 @@
     python main.py overview FOLDER [FOLDER ...] [CSV] # 온도 + 히트맵 + 온도 구간 한 장
     python main.py overview x1                       # experiments.toml 의 [[exp]] 이름 → 그 images · recipe
     python main.py compare  [experiments.toml]       # 실험별 피크 X vs 온도, T50 비교
+    python main.py avrami   [experiments.toml]       # 등온 [[iso]] → Avrami n, k, (Ea)
     python main.py merge-temp [CSV ...]              # 온도 로그 병합
     python main.py temp     15:55:00 FILE.h5 FOLDER  # 특정 시각/프레임의 온도
 
@@ -127,6 +128,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-show", action="store_true", help="브라우저로 열지 않음")
     _add_geometry(p)
 
+    p = sub.add_parser("avrami", help="등온 측정([[iso]]) → Avrami 지수 n · 속도상수 k · 활성화 에너지 Ea")
+    p.add_argument("config", nargs="?", type=Path, default=None,
+                   help="설정 TOML (생략 시 프로젝트 폴더의 experiments.toml)")
+    p.add_argument("--only", nargs="+", default=None, metavar="NAME",
+                   help="이 이름(또는 sample)의 [[iso]] 만 분석")
+    p.add_argument("--exp", action="store_true",
+                   help="[[iso]] 대신 [[exp]] 목록 분석 (기존 승온 데이터로 시험; 비등온이라 n·k 는 겉보기 값)")
+    p.add_argument("-j", "--workers", type=int, default=None)
+    p.add_argument("--no-show", action="store_true", help="그림 창 띄우지 않음")
+    _add_geometry(p)
+
     p = sub.add_parser("merge-temp", help="온도 로그 CSV 여러 개 → 하나로 병합")
     p.add_argument("csvs", nargs="*", type=Path, help=f"생략 시 {TEMP_DIR / 'raw'}/*.csv 전부")
     p.add_argument("-o", "--out", type=Path, default=DEFAULT_LOG)
@@ -226,6 +238,11 @@ def main(argv: list[str] | None = None) -> None:
         case "compare":
             from . import compare
             compare.run(a.config or SETTINGS_FILE, _geometry(a), a.workers, show=not a.no_show)
+
+        case "avrami":
+            from . import avrami
+            avrami.run(a.config or SETTINGS_FILE, _geometry(a), a.workers, only=a.only,
+                       show=not a.no_show, section="exp" if a.exp else "iso")
 
         case "merge-temp":
             from . import temperature

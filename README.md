@@ -34,22 +34,22 @@ out/cache/               적분 결과 캐시 (지워도 다시 계산됨)
 
 ```powershell
 uv sync
-uv run python main.py                        # 인자 없이 (VS Code ▶ 포함) = compare (experiments.toml)
-uv run python main.py --no-show              # 위와 같되 브라우저 안 염 (명령 없이 옵션만 → 기본 명령에)
-uv run python main.py -h                     # 명령 목록
-uv run python main.py timing  Z:\exp\hkim\261004\images\testx1
-uv run python main.py center  Z:\...\testx1_00089.h5 --width 100
-uv run python main.py profile Z:\...\testx1_00089.h5 --alpha 18.9
-uv run python main.py heatmap Z:\...\testx1 --log -j 8 --no-show
+uv run main.py                        # 인자 없이 (VS Code ▶ 포함) = compare (experiments.toml)
+uv run main.py --no-show              # 위와 같되 브라우저 안 염 (명령 없이 옵션만 → 기본 명령에)
+uv run main.py -h                     # 명령 목록
+uv run main.py timing  Z:\exp\hkim\261004\images\testx1
+uv run main.py center  Z:\...\testx1_00089.h5 --width 100
+uv run main.py profile Z:\...\testx1_00089.h5 --alpha 18.9
+uv run main.py heatmap Z:\...\testx1 --log -j 8 --no-show
 ```
 
 ### 온도 + 히트맵 + 온도 구간 한 장 (Origin 스타일)
 
 ```powershell
-uv run python main.py overview x1                                    # experiments.toml 의 [[exp]] x1 (images · recipe 그대로)
-uv run python main.py overview Z:\exp\hkim\261004\images\test2x1
-uv run python main.py overview Z:\...\testx1 Z:\...\test2x1          # 폴더 여러 개 → 시간순으로 이어 붙임
-uv run python main.py overview Z:\...\test2x1 data\temperature\other.csv   # 온도 로그 지정 (생략 시 자동 선택)
+uv run main.py overview x1                                    # experiments.toml 의 [[exp]] x1 (images · recipe 그대로)
+uv run main.py overview Z:\exp\hkim\261004\images\test2x1
+uv run main.py overview Z:\...\testx1 Z:\...\test2x1          # 폴더 여러 개 → 시간순으로 이어 붙임
+uv run main.py overview Z:\...\test2x1 data\temperature\other.csv   # 온도 로그 지정 (생략 시 자동 선택)
 ```
 
 가로축 = 시간: 위에 구간 라벨 → 온도 그래프 → 2θ 히트맵(세로=2θ) 이 시간축 공유, 오른쪽에 구간 경계 프로파일 → `out/<샘플>/<샘플>_overview.png` (300 dpi).
@@ -148,14 +148,48 @@ uv run python main.py compare 다른설정.toml
 - 적분 결과는 `out/cache/` 에 캐시 (overview · heatmap 과 공용; 폴더 파일·기하·적분 옵션이 그대로면 재사용)
 - 13 keV 에서 (222) ≈ 18.8°, (400) ≈ 21.7°
 
+### 등온 실험 → Avrami 지수
+
+온도 구간을 판별하지 않고 **X 변화만** 봄 → 등온·승온 어떤 측정에도 돌아감.
+`experiments.toml` 에 측정마다 `[[iso]]` 하나 (측정 하나 = 비정질 새 조각):
+
+```toml
+[[iso]]
+sample = "x1"            # 같은 sample 끼리 묶어 Arrhenius (등온 온도 2개 이상이면 Ea)
+T_iso  = 370             # (선택) 이름 붙이기용. 실제 온도는 로그에서 계산
+images = ['Z:\exp\hkim\26xxxx\images\IGOx1_iso370']
+recipe = ['D:\...\recipe_data_xxxx.csv']   # (선택) 없으면 n, k 만
+# start / end = "10:05" (선택, 프레임 범위),  t0 = "10:15:02" (선택, 변화 시작 직접 지정)
+```
+
+```powershell
+uv run python main.py avrami                 # [[iso]] 전부
+uv run python main.py avrami --only x1       # 이름 또는 sample 로 일부만
+uv run python main.py avrami --exp           # [[iso]] 대신 [[exp]] — 기존 승온 데이터로 시험
+```
+
+- X(t): compare 와 같은 방식 (비정질로 나눈 R 의 FWHM 창 면적). X = 0 은 처음 프레임, X = 1 은 마지막 프레임
+- 변화가 끝나 평평해진 뒤 X 가 다시 크게 변하면(승온 계속·냉각 등) 그 지점에서 분석 구간을 자르고 X = 1 을 변화 직후 상태로 (`end` 를 적으면 그 값 우선)
+- 온도 로그가 있으면 로그 시간대 밖 프레임(덮어쓰기 잔여 등)은 제외
+- **t0** (변화 시작): JMAK X = 1 − exp(−(k(t − t0))ⁿ) 를 n, k, t0 모두 피팅해서 구함 (잠복시간이 t0 에 흡수됨). `t0` 를 적으면 그 시각 사용
+- **Avrami 플롯** ln[−ln(1−X)] vs ln(t − t0) 를 `fit_range`(0.15–0.85) 에서 직선 피팅 → n, k (주된 변화 구간의 점만)
+- 온도 = X 가 10–90 % 인 동안의 PV 평균. 그동안 `iso_span`(5 °C) 넘게 변하면 **비등온**: n, k 는 겉보기 값이고 Arrhenius 에서 제외
+- 같은 sample 등온 온도 2개 이상 → ln k vs 1/T → Ea (Avrami k 기준 `Ea_eV`, JMAK k 기준 `Ea_jmak_eV`)
+- 경고: 처음부터 이미 변화 중 / 아직 포화 안 됨 (처음·마지막 5분 X 변화), t0 가 첫 이미지보다 앞, 비등온
+- (400) 은 적분 창이 디텍터 끝에서 잘리므로 (222) 값을 우선
+- 결과: `out/avrami/<설정이름>_<iso|exp>_avrami.png / .csv / _arrhenius.csv / _frames.csv`
+- 합성 데이터 검증 (정답 n 2.7 · Ea 2.40 eV / 잠복 1.5 min · n 2.0 · Ea 1.80 eV): n 2.60–2.73, Ea 2.35 eV / n 1.98–2.02, Ea 1.78–1.81 eV
+- 기존 승온 데이터(`--exp`, 10 °C/min): 변화 중심 온도 x1 399 · x2 396 · x4 376 · x8 319 °C (compare T50 과 일치),
+  겉보기 n 6–10, X 15–85 % 구간이 7–10 프레임뿐 → 등온 측정이 필요한 이유
+
 ### 온도
 
 ```powershell
-uv run python main.py merge-temp                        # raw/*.csv → 병합본 (새 로그 추가 시 재실행)
-uv run python main.py temp 16:55:00                     # 특정 시각(KST)의 온도
-uv run python main.py temp Z:\...\test2x1_00086.h5      # 특정 프레임의 온도
-uv run python main.py temp Z:\...\test2x1               # 폴더 전체 프레임별 온도
-uv run python main.py heatmap Z:\...\test2x1 --temp --at 0 10 16:55:00
+uv run main.py merge-temp                        # raw/*.csv → 병합본 (새 로그 추가 시 재실행)
+uv run main.py temp 16:55:00                     # 특정 시각(KST)의 온도
+uv run main.py temp Z:\...\test2x1_00086.h5      # 특정 프레임의 온도
+uv run main.py temp Z:\...\test2x1               # 폴더 전체 프레임별 온도
+uv run main.py heatmap Z:\...\test2x1 --temp --at 0 10 16:55:00
 ```
 
 - `--temp [CSV]` : 히트맵 옆에 온도(PV/SV) 패널. 경로 생략 시 병합본 사용

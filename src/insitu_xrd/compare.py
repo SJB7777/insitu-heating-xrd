@@ -162,6 +162,31 @@ def peak_window(x: np.ndarray, prof: np.ndarray, guess: float, search: float,
     return float(xs[i]), float(fwhm), float(k * fwhm)
 
 
+def peak_areas(x: np.ndarray, Z: np.ndarray, base: np.ndarray, final: np.ndarray, st: Settings,
+               say=print) -> tuple[dict[str, tuple[float, float, float, float]], dict[str, np.ndarray]]:
+    """피크별 (중심, FWHM, 창 시작, 끝) 과 프레임별 면적.
+    base 프레임(전이 전, 비정질) 평균으로 나눔: R = I / I_amorphous − 1
+      → 디텍터 가장자리 세기 감소(곱셈 효과)와 비정질 배경이 상쇄되어 결정 피크만 깔끔한 봉우리로 남음.
+    창은 final 프레임(결정화가 끝난 상태) 평균 R 에서 [peaks] 참고값 근처 피크를 찾아 정함."""
+    pre = time_mean(Z[base])
+    cover = np.isfinite(pre) & (pre > 0.3 * np.nanmedian(pre))     # 디텍터가 거의 안 닿는 2θ 제외
+    with np.errstate(all="ignore"):
+        R = np.where(cover, Z / pre - 1.0, np.nan)
+    ref = time_mean(R[final])
+    dx = x[1] - x[0]
+    windows, areas = {}, {}
+    for pk, guess in st.peaks.items():
+        c, fwhm, hw = peak_window(x, ref, guess, st.search, st.fwhm_k)
+        lo, hi = _clip_window(x, cover | np.isnan(pre), c, c - hw, c + hw)
+        windows[pk] = (c, fwhm, lo, hi)
+        cut = " ⚠️ 디텍터 범위 끝에서 잘림" if (lo > c - hw + dx or hi < c + hw - dx) else ""
+        say(f"   {pk:>6}: 중심 {c:.3f}°  FWHM {fwhm:.3f}°  →  적분 {lo:.2f}–{hi:.2f}° "
+            f"(±{st.fwhm_k:g}·FWHM){cut}" if np.isfinite(fwhm) else
+            f"   {pk:>6}: ⚠️ {guess}° ±{st.search}° 에서 피크를 못 찾음 → {lo:.2f}–{hi:.2f}° 적분")
+        areas[pk] = np.array([window_area(x, r, (lo + hi) / 2, (hi - lo) / 2) for r in R])
+    return windows, areas
+
+
 @dataclass(slots=True)
 class Analysis:
     use: np.ndarray                 # 프레임별: 계산에 쓴 프레임 (승온 · 온도 범위 · 빔 정상)
@@ -213,28 +238,12 @@ def analyze(x: np.ndarray, Z: np.ndarray, t: np.ndarray, T: np.ndarray, log: Tem
     else:
         ok, msg = False, "사용할 프레임 없음"
 
-    t50, windows, As, Xs = {}, {}, {}, {}
-    # 비정질(전이 전) 프로파일로 나눔: R = I / I_amorphous − 1
-    #   디텍터 가장자리 세기 감소(곱셈 효과)와 비정질 배경이 상쇄되어 결정 피크만 깔끔한 봉우리로 남음
+    t50, Xs = {}, {}
     iu_all = np.flatnonzero(use)
     if not len(iu_all):
         iu_all = np.flatnonzero(has_T)
-    pre = time_mean(Z[iu_all[:st.n_norm]])
-    cover = np.isfinite(pre) & (pre > 0.3 * np.nanmedian(pre))     # 디텍터가 거의 안 닿는 2θ 제외
-    with np.errstate(all="ignore"):
-        R = np.where(cover, Z / pre - 1.0, np.nan)
-    # 창은 결정화가 끝난 상태(사용 구간 마지막 n_norm 프레임 평균)에서 정함
-    ref = time_mean(R[iu_all[-st.n_norm:]])
-    dx = x[1] - x[0]
-    for pk, guess in st.peaks.items():
-        c, fwhm, hw = peak_window(x, ref, guess, st.search, st.fwhm_k)
-        lo, hi = _clip_window(x, cover | np.isnan(pre), c, c - hw, c + hw)
-        windows[pk] = (c, fwhm, lo, hi)
-        cut = " ⚠️ 디텍터 범위 끝에서 잘림" if (lo > c - hw + dx or hi < c + hw - dx) else ""
-        say(f"   {pk:>6}: 중심 {c:.3f}°  FWHM {fwhm:.3f}°  →  적분 {lo:.2f}–{hi:.2f}° "
-            f"(±{st.fwhm_k:g}·FWHM){cut}" if np.isfinite(fwhm) else
-            f"   {pk:>6}: ⚠️ {guess}° ±{st.search}° 에서 피크를 못 찾음 → {lo:.2f}–{hi:.2f}° 적분")
-        A = np.array([window_area(x, r, (lo + hi) / 2, (hi - lo) / 2) for r in R])
+    windows, As = peak_areas(x, Z, iu_all[:st.n_norm], iu_all[-st.n_norm:], st, say)
+    for pk, A in As.items():
         X = np.full(len(A), np.nan)
         iu = np.flatnonzero(use & np.isfinite(A))
         if len(iu) >= 2:
@@ -248,12 +257,21 @@ def analyze(x: np.ndarray, Z: np.ndarray, t: np.ndarray, T: np.ndarray, log: Tem
     return Analysis(use, kind, ok, msg, t50, windows, As, Xs)
 
 
-def run_exp(exp: Experiment, st: Settings, geo: Geometry, workers: int | None,
-            color: str = "#000000") -> ExpResult:
+@dataclass(slots=True)
+class ExpData:
+    x: np.ndarray                   # 2θ
+    Z: np.ndarray                   # 세기 [frame, 2θ], 시간순
+    t: np.ndarray                   # 촬영시각 Unix [frame]
+    files: np.ndarray
+    T: np.ndarray                   # 프레임 PV 온도 (로그 밖 NaN)
+    log: TempLog | None             # 온도 로그가 없으면 None
+    note: str = ""
+
+
+def load_exp(exp: Experiment, st: Settings, geo: Geometry, workers: int | None) -> ExpData:
+    """실험의 이미지 폴더(들) 적분(캐시) → 시간순으로 합치고 start/end 로 자르고 온도 매칭."""
     print(f"\n🧪 {exp.name}: {', '.join(str(p) for p in exp.images)}  |  "
           f"{', '.join(p.name for p in exp.recipe) or '온도 로그 없음'}")
-    if not exp.recipe:
-        raise SystemExit(f"❌ {exp.name}: recipe(온도 로그) 가 필요함")
     parts = [integrate_folder(Config(folder=f, geometry=geo, workers=workers,
                                      profile=ProfileOptions(tth_bin=st.tth_bin)))
              for f in exp.images]
@@ -274,6 +292,8 @@ def run_exp(exp: Experiment, st: Settings, geo: Geometry, workers: int | None,
     Z, t, files = Z[keep], t[keep], files[keep]
 
     # 온도: 로그가 실제로 있는 시각만 (바깥은 NaN)
+    if not exp.recipe:          # 온도 로그 없음 → 온도 NaN (avrami 는 그래도 n·k 계산)
+        return ExpData(x, Z, t, files, np.full(len(t), np.nan), None, "온도 로그 없음")
     log = TempLog.load(exp.recipe)
     T = log.at(t, PV)
     n_T = int(np.isfinite(T).sum())
@@ -281,7 +301,15 @@ def run_exp(exp: Experiment, st: Settings, geo: Geometry, workers: int | None,
     if n_T < len(t):
         note = f"온도 있는 프레임 {n_T}/{len(t)} (로그 {log.span[0][11:]}~{log.span[1][11:]} 밖은 제외)"
         print(f"   ⚠️  {note}")
+    return ExpData(x, Z, t, files, T, log, note)
 
+
+def run_exp(exp: Experiment, st: Settings, geo: Geometry, workers: int | None,
+            color: str = "#000000") -> ExpResult:
+    if not exp.recipe:
+        raise SystemExit(f"❌ {exp.name}: recipe(온도 로그) 가 필요함")
+    d = load_exp(exp, st, geo, workers)
+    x, Z, t, files, T, log, note = d.x, d.Z, d.t, d.files, d.T, d.log, d.note
     an = analyze(x, Z, t, T, log, st)
     if an.msg:
         note = (note + " / " if note else "") + an.msg
