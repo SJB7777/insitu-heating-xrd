@@ -1,0 +1,28 @@
+[project]
+name = "insitu-heating-xrd"
+version = "0.1.0"
+description = "In-situ heating 2D XRD analysis (Eiger HDF5 + temperature-controller logs): segments, peak tracking, crystallisation T50"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "h5py>=3.16.0",
+    "hdf5plugin>=7.1.0",
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "plotly>=7.1.0",
+    "scipy>=1.18.1",
+    "tqdm>=4.67",
+]
+
+[project.scripts]
+insitu-xrd = "insitu_xrd.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "insitu_xrd"
