@@ -712,7 +712,7 @@ def compare_html(results: list[IsoResult], st: Settings, path: Path, group: str,
         ax = fig.get_subplot(1, j)
         leg["legend" if j == 1 else f"legend{j}"] = dict(x=ax.xaxis.domain[0] + 0.005, xanchor="left",   # 왼쪽 위
                                                          y=ax.yaxis.domain[1] - 0.01, yanchor="top", **LEGEND)
-    header(fig, f"[{group}]  isothermal",
+    header(fig, "isothermal" if group == "pick" else f"[{group}]  isothermal",
            "t = 0 at isothermal start  ·  ◆ / number = t50 (X = 0.5, min)  ·  legend: T · t50 · Avrami n")
     origin_plotly(fig)
     fig.update_layout(margin=dict(t=80, l=90, r=30, b=60), **leg)
@@ -724,11 +724,20 @@ def compare_html(results: list[IsoResult], st: Settings, path: Path, group: str,
     return write_fit_html(fig, path, 150 + 540 * len(peaks), 800)
 
 
-def compare_iso(config: Path, group: str, geo: Geometry, workers: int | None, show: bool = True,
+def compare_iso(config: Path, group: str | list[Experiment], geo: Geometry, workers: int | None, show: bool = True,
                 colors: dict[str, str] | None = None) -> list[IsoResult]:
-    """compare 의 등온 회차 ([[iso]] ...): 온도 대신 시간 (등온 시작부터) 으로 X · FWHM 비교."""
+    """compare 의 등온 회차 ([[iso]] ...) 또는 고른 등온 실험들: 온도 대신 시간 (등온 시작부터) 으로 X · FWHM 비교."""
     import webbrowser
-    st, runs, opt = load_iso(config, group)
+    from dataclasses import replace
+    if isinstance(group, str):
+        st, runs, opt = load_iso(config, group)
+    else:                                   # 고른 실험들 (회차 섞임): 이름 = 회차.이름
+        picks, runs = group, []
+        for e in picks:
+            st, rs, opt = load_iso(config, e.group)
+            r = next(r for r in rs if r.exp.name == e.name)
+            runs.append(replace(r, exp=replace(r.exp, name=f"{e.group}.{e.name}")))
+        group = "pick"
     results = []
     for r in runs:
         d = load_exp(r.exp, st, geo, workers)
@@ -742,7 +751,8 @@ def compare_iso(config: Path, group: str, geo: Geometry, workers: int | None, sh
     summary = pd.DataFrame(rows)
     print(f"\n📊 [[{group}]] 등온 — t50 = 등온 시작부터 X 0.5 까지 [min], k [1/min]\n" + summary.to_string(index=False))
     d = out_dir("compare")
-    stem = f"{Path(config).stem}_{group}"
+    stem = ("+".join(r.run.exp.name.replace(".", "_") for r in results) if group == "pick"
+            else f"{Path(config).stem}_{group}")
     page = compare_html(results, st, d / f"{stem}.html", group, colors)
     if saving():
         summary.to_csv(d / f"{stem}_t50.csv", index=False, encoding="utf-8-sig")

@@ -579,6 +579,9 @@ def run(config: Path = DEFAULT_CONFIG, geo: Geometry = Geometry(), workers: int 
     """실험 회차([[exp]], [[exp2]], ..., [[iso]])마다 차례로 비교 → 회차별 결과 파일 · 브라우저 창."""
     raw = load_toml(config)
     groups = groups or exp_groups(raw)
+    picks = [g for g in groups if g not in raw]        # 회차가 아닌 것 = 실험 이름 (iso3.x1, x8_300 ...)
+    if picks:
+        return {"pick": _run_picks(picks, config, geo, workers, show, raw)}
     unknown = [g for g in groups if g not in raw]
     if not groups or unknown:
         raise SystemExit(f"❌ {config}: 회차 {', '.join(unknown) or '[[exp]]'} 없음 "
@@ -604,11 +607,35 @@ def run(config: Path = DEFAULT_CONFIG, geo: Geometry = Geometry(), workers: int 
     return out
 
 
+def _run_picks(names: list[str], config: Path, geo: Geometry, workers: int | None, show: bool, raw: dict):
+    """실험 이름 여러 개 (회차 섞어도 됨) → 한 장. 전부 등온 회차면 시간 비교, 아니면 온도 비교."""
+    from dataclasses import replace
+    picked = []
+    for nm in names:
+        e = find_exp(nm, config)
+        if e is None:
+            raise SystemExit(f"❌ 없음: {nm}  (회차 이름 또는 실험 이름)\n   있는 회차: {', '.join(exp_groups(raw))}"
+                             f"\n   있는 이름: {exp_names(config)}")
+        picked.append(e)
+    check_paths(picked)
+    names_all = list(dict.fromkeys(f"{e.group}.{e.name}" for e in picked))
+    colors = {f"{e.group}.{e.name}": EXP_COLORS[i % len(EXP_COLORS)] for i, e in enumerate(picked)}
+    label = " + ".join(names_all)
+    print(f"\n{'═' * 70}\n📋 {label}")
+    if all(e.group.startswith("iso") for e in picked):
+        from .avrami import compare_iso
+        return compare_iso(config, picked, geo, workers, show, colors)
+    st = replace(load_settings(config, need_exps=False), exps=[replace(e, name=f"{e.group}.{e.name}") for e in picked],
+                 group="pick")
+    return _run_group(st, geo, workers, show, colors)
+
+
 def _run_group(st: Settings, geo: Geometry, workers: int | None, show: bool,
                colors: dict[str, str]) -> list[ExpResult]:
     results = [run_exp(e, st, geo, workers, e.color or colors.get(e.name, "#000000")) for e in st.exps]
     d = out_dir("compare")
-    stem = st.path.stem if st.group == "exp" else f"{st.path.stem}_{st.group}"
+    stem = (st.path.stem if st.group == "exp" else
+            "+".join(e.name.replace(".", "_") for e in st.exps) if st.group == "pick" else f"{st.path.stem}_{st.group}")
     def _row(r: ExpResult) -> dict:
         row = {"exp": r.name}
         for k, v in r.t50.items():

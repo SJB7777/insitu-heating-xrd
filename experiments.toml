@@ -174,4 +174,21 @@ T_iso  = 370
 images = ['Z:\exp\hkim\261004\images\IGO_x1_isotemp_2nd']                                  
 recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x1_isotemp_2nd\recipe_data_20261006_064644.csv']
 
-# [[iso2]]
+
+[[iso2]]
+sample = "x2"
+T_iso  = 370
+images = ['Z:\exp\hkim\261004\images\IGO_x1_isotemp_3rd']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x1_isotemp_2nd\recipe_data_20261006_064644.csv']
+
+[[iso3]]
+sample = "x1"
+T_iso  = 380
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x1_3rd_380\recipe_data_20261006_084631.csv']
+images = ['Z:\exp\hkim\261004\images\IGO_x1_isotemp_3rd']
+
+[[iso3]]
+sample = "x2"
+T_iso  = 370
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x1_3rd_380\recipe_data_20261006_084631.csv']
+images = ['Z:\exp\hkim\261004\images\IGO_x2_isotemp_3rd']
