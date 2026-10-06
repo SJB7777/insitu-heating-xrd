@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import find_peaks, peak_widths
 
-from .config import out_dir
+from .config import out_dir, saving
 from .geometry import FArray
 from .integrate import strip_bounds
 from .io import load_image
@@ -29,7 +29,7 @@ def detect_pixel_peaks(prof: FArray, prominence: float | None = None, distance: 
 
 def run(file: Path, strip_width: int = 100, reduce: Literal["mean", "sum"] = "mean",
         prominence: float | None = 1, min_distance: int = 10,
-        save: bool = True, show: bool = True) -> plt.Figure:
+        save: bool | None = None, show: bool = True) -> plt.Figure:
     img = load_image(file)
     prof, (x0, x1) = center_strip_profile(img, strip_width, reduce)
     peaks, props = detect_pixel_peaks(prof, prominence, min_distance)
@@ -57,14 +57,14 @@ def run(file: Path, strip_width: int = 100, reduce: Literal["mean", "sum"] = "me
     ax1.plot(peaks, prof[peaks], "rx", ms=8)
     for p in peaks:
         ax1.annotate(str(p), (p, prof[p]), textcoords="offset points",
-                     xytext=(0, 6), ha="center", fontsize=8, color="r")
+                     xytext=(0, 6), ha="center", fontsize=10, color="r")
     ax1.set_xlabel("y (row, px)")
     ax1.set_ylabel(f"{reduce} intensity (x={x0}–{x1 - 1})")
     ax1.set_title(f"Center strip profile (width={strip_width}px), {len(peaks)} peaks")
     ax1.grid(alpha=0.3)
 
     fig.tight_layout()
-    if save:
+    if saving() if save is None else save:
         save_file = out_dir(file.parent.name) / f"{file.stem}_center_profile.png"
         fig.savefig(save_file, dpi=150)
         print(f"그림 저장: {save_file}")

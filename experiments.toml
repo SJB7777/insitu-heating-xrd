@@ -28,6 +28,7 @@ default_folder = 'Z:\exp\hkim\261004\images\testx1'
 default_file   = 'Z:\exp\hkim\261004\images\testx1\testx1_00089.h5'
 
 [options]
+cache   = "use"         # 적분 캐시: "use" 재사용 / "refresh" 매번 다시 적분 / "off" 안 씀 (명령에 --refresh · --no-cache 로 일회성)
 segment = "heat"        # "heat" = 승온 구간만 사용, "all" = 전체
 level   = 0.5           # T50 기준: X 가 이 값을 처음 넘는 온도
 n_norm  = 10            # X 정규화: 처음 n 프레임 = 0, 마지막 n 프레임 = 1
@@ -37,7 +38,6 @@ search  = 0.5           # 아래 참고 2θ ± search 안에서 실제 피크를
 fwhm_k  = 1.5           # 적분 창 = 찾은 중심 ± fwhm_k × 반치폭(FWHM)  (실험·피크마다 자동)
 # avrami 전용 (segment · t_range 는 안 씀: 온도 구간 판별 없이 X 변화만 봄)
 fit_range = [0.15, 0.85]  # Avrami 플롯 직선 피팅에 쓰는 X 범위
-iso_span  = 5.0           # X 10–90 % 동안 온도가 이보다 크게 변하면 비등온 → Arrhenius 에서 제외 [°C]
 
 # 피크 이름 = 참고 2θ (대략 이 근처라는 뜻. 실제 중심·반치폭은 실험마다 결정화 끝난 상태에서 찾음)
 # 13 keV, In2O3 (a = 10.117 Å): (222) ≈ 18.79° (아래 픽), (400) ≈ 21.74° (위 픽)
@@ -46,13 +46,15 @@ iso_span  = 5.0           # X 10–90 % 동안 온도가 이보다 크게 변하
 "(400)" = 21.8
 
 # 실험 하나당 [[exp]] 하나. images / recipe 는 여러 개 가능 (시간순으로 합침)
+# 회차: 2회차 실험은 [[exp2]], 3회차는 [[exp3]] ... → compare 가 회차마다 차례로 (창 하나씩)
+#       하나만: compare -g exp2,  overview 에서 회차 지정: overview exp2.x8
 # start / end (선택): 이 시각 사이 프레임만 사용. "2026-10-05 03:30" 또는 "03:30"
 # color (선택): 선 색 "#d62728" (생략하면 순서대로 빨강 · 파랑 · 초록 · 보라 ...)
 
 [[exp]]
 name   = "x1"
-images = ['D:\USER_DATA\hkim\261004\data\IGOx1']                                  # 18:22~19:46
-recipe = ['D:\USER_DATA\hkim\261004\data\temperature\recipe_data_20261004_x1.csv'] # 18:07~19:45
+images = ['D:\USER_DATA\hkim\261004\data\IGOx1_2nd']                                  # 18:22~19:46
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x1_2nd\recipe_data_20261005_073454.csv'] # 18:07~19:45
 
 [[exp]]
 name   = "x2"
@@ -69,6 +71,45 @@ name   = "x8"
 images = ['D:\USER_DATA\hkim\261004\data\IGOx8']    # 로컬 백업 (05:36~06:59, 정상 x8). Z:\...\IGOx8 은 다른 데이터
 recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261004_9C_IGO_x8_2nd\recipe_data_20261005_051334.csv']
 
+[[exp2]]
+name   = "x1"
+images = ['Z:\exp\hkim\261004\images\IGOx1_3rd']                                
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x1_3rd\recipe_data_20261005_145012.csv'] 
+
+[[exp2]]
+name   = "x2"
+images = ['Z:\exp\hkim\261004\images\IGOx2_2nd']                                 
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x2_2nd\recipe_data_20261005_125922.csv'] 
+
+[[exp2]]
+name   = "x4"
+images = ['Z:\exp\hkim\261004\images\IGOx4_3rd']        
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x4_3rd\recipe_data_20261005_092228.csv']
+
+[[exp2]]
+name   = "x8"
+images = ['Z:\exp\hkim\261004\images\IGOx8_3rd']    
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x8_3rd\recipe_data_20261005_111220.csv']
+
+[[exp3]]
+name   = "x4"
+images = ['Z:\exp\hkim\261004\images\IGOx4_5th']                                
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGOx4_5th\recipe_data_20261005_145012.csv']
+
+[[exp3]]
+name   = "x8"
+images = ['Z:\exp\hkim\261004\images\IGOx8_5th']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x8_5th\recipe_data_20261005_183627.csv']
+
+[[exp3]]
+name   = "x2"
+images = ['Z:\exp\hkim\261004\images\IGO_x2_5th']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x2_5th\recipe_data_20261005_203424.csv']
+
+[[exp3]]
+name   = "x1"
+images = ['Z:\exp\hkim\261004\images\IGO_x1_5th']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x1_5th\recipe_data_20261005_222223.csv']
 # ─────────────────────────────────────────────────────────────────────────────
 # 등온 실험 → Avrami 지수 (uv run python main.py avrami)
 # 측정 하나 = 비정질 새 조각 하나. 온도 구간 판별 없이 X 변화만 봄 (처음 프레임 = 0, 마지막 = 1)
@@ -79,12 +120,58 @@ recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261004_9C_IGO_x8_2nd\recipe
 #   t0     : (선택) 변화 시작 시각 "10:15:02". 생략하면 JMAK 피팅으로 구함
 #   start / end : (선택) 이 시각 사이 프레임만 — X 의 0 / 1 기준이 되는 처음·끝을 정함
 #   name / color : (선택)
-# 기존 승온 데이터로 시험: uv run python main.py avrami --exp   (위 [[exp]] 를 그대로 분석)
+# 기존 승온 데이터로 시험: uv run main.py avrami -g exp   (위 [[exp]] 를 그대로 분석, -g exp2 도 가능)
 # 측정이 끝나면 아래 예시의 주석(#)을 풀고 경로를 고쳐 쓰기
 # ─────────────────────────────────────────────────────────────────────────────
+#uv run main.py compare iso
+#uv run main.py overview --iso iso.x2
+#uv run main.py heatmap "Z:\exp\hkim\261004\images\IGO_x2_isotemp_1st"
+[[iso]]
+sample = "x1"
+T_iso  = 380
+images = ['Z:\exp\hkim\261004\images\IGO_x1_5th']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x1_isotemp_1st\recipe_data_20261005_222223.csv']
 
-# [[iso]]
-# sample = "x1"
-# T_iso  = 370
-# images = ['Z:\exp\hkim\26xxxx\images\IGOx1_iso370']
-# recipe = ['D:\USER_DATA\hkim\26xxxx\data\temperature\recipe_data_xxxx.csv']
+[[iso]]
+sample = "x2"
+T_iso  = 380
+images = ['Z:\exp\hkim\261004\images\IGO_x2_isotemp_1st']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261005_9C_IGO_x2_isotemp_1st\recipe_data_20261006_010057.csv']
+
+[[iso]]
+sample = "x4"
+T_iso  = 360
+images = ['Z:\exp\hkim\261004\images\IGO_x4_isotemp_1st']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x4_isotemp_1st\recipe_data_20261006_015924.csv']
+
+[[iso]]
+sample = "x8"
+T_iso  = 300
+images = ['Z:\exp\hkim\261004\images\IGO_x8_isotemp_1st']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x8_isotemp_1st\recipe_data_20261006_025136.csv']
+
+[[iso2]]
+sample = "x8"
+T_iso  = 290
+images = ['Z:\exp\hkim\261004\images\IGO_x8_isotemp_2nd']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x8_isotemp_2nd\recipe_data_20261006_033844.csv']
+
+[[iso2]]
+sample = "x4"
+T_iso  = 350
+images = ['Z:\exp\hkim\261004\images\IGO_x4_isotemp_2nd']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x4_isotemp_2nd\recipe_data_20261006_043746.csv']
+
+[[iso2]]
+sample = "x2"
+T_iso  = 370
+images = ['Z:\exp\hkim\261004\images\IGO_x2_isotemp_2nd']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x2_isotemp_2nd\recipe_data_20261006_053522.csv']
+
+[[iso2]]
+sample = "x1"
+T_iso  = 370
+images = ['Z:\exp\hkim\261004\images\IGO_x1_isotemp_2nd']                                  
+recipe = ['D:\USER_DATA\hkim\261004\data\temperature\261006_9C_IGO_x1_isotemp_2nd\recipe_data_20261006_064644.csv']
+
+# [[iso2]]

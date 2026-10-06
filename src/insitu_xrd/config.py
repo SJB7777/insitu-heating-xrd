@@ -6,6 +6,8 @@
 
 이미지 경로는 자동으로 찾지 않음: experiments.toml 과 명령줄에 실제 경로를 그대로 적음.
 """
+import os
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -41,6 +43,16 @@ _S = load_toml(SETTINGS_FILE) if SETTINGS_FILE.exists() else {}
 _geo = _S.get("geometry", {})
 _paths = _S.get("paths", {})
 
+# ===== 적분 캐시 (out/cache) =====
+#   use     = 폴더 파일(개수·수정시각) · 기하 · 적분 옵션이 같으면 재사용 (기본)
+#   refresh = 무조건 다시 적분하고 캐시 덮어씀
+#   off     = 캐시를 읽지도 쓰지도 않음
+# 우선순위: 명령의 --cache > 환경변수 INSITU_XRD_CACHE > experiments.toml [options] cache > "use"
+CACHE_MODES = ("use", "refresh", "off")
+CACHE_MODE = str(os.environ.get("INSITU_XRD_CACHE") or _S.get("options", {}).get("cache", "use")).lower()
+if CACHE_MODE not in CACHE_MODES:
+    raise SystemExit(f"❌ cache = '{CACHE_MODE}' 는 잘못된 값 ({' / '.join(CACHE_MODES)})")
+
 # ===== 디텍터 기하 / 빔 — experiments.toml [geometry] =====
 PONI_PX = tuple(float(v) for v in _geo.get("poni_px", (514.0, 850.0)))   # PONI (x, y) [px]
 SDD_MM = float(_geo.get("sdd_mm", 861.14))                                # 시료 → PONI 거리 [mm]
@@ -53,8 +65,27 @@ DEFAULT_FOLDER = project_path(_paths.get("default_folder", r"Z:\exp\hkim\261004\
 DEFAULT_FILE = project_path(_paths.get("default_file", DEFAULT_FOLDER / "testx1_00089.h5"))
 
 
-def out_dir(sample: str) -> Path:
-    """out/<sample>/ 을 만들고 반환."""
-    d = OUT_DIR / sample
+# ===== 결과물 저장 (PNG · CSV · HTML) =====
+#   기본은 저장 안 함: 그림만 띄우고, 브라우저용 HTML 은 임시 폴더에 씀.
+#   켜기: 명령 어디에나 --save (out/ 아래) 또는 --save-dir DIR,
+#         환경변수 INSITU_XRD_SAVE=1, experiments.toml [options] save = true
+VIEW_DIR = Path(tempfile.gettempdir()) / "insitu-xrd"
+_save_root: Path | None = (OUT_DIR if (os.environ.get("INSITU_XRD_SAVE", "").lower() in ("1", "true", "yes")
+                                       or _S.get("options", {}).get("save", False)) else None)
+
+
+def set_save(root: Path | None) -> None:
+    """저장 폴더 지정 (None = 저장 안 함, 임시 폴더만)."""
+    global _save_root
+    _save_root = root
+
+
+def saving() -> bool:
+    return _save_root is not None
+
+
+def out_dir(sub: str) -> Path:
+    """결과물 폴더: 저장 켜짐 → <out>/<sub>, 꺼짐 → 임시 폴더 (HTML 띄우기용)."""
+    d = (_save_root or VIEW_DIR) / sub
     d.mkdir(parents=True, exist_ok=True)
     return d

@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d, median_filter
+from scipy.optimize import isotonic_regression
 from scipy.signal import find_peaks
+from scipy.stats import linregress, theilslopes
 
 from .heatmap import beam_ok
 from .style import TRACK_COLORS  # noqa: F401  (tk.TRACK_COLORS 로도 씀)
@@ -184,6 +186,84 @@ def level_temperature(T: np.ndarray, X: np.ndarray, level: float, m: int = 5) ->
     x0, x1 = X[j - 1], X[j]
     w = (level - x0) / (x1 - x0) if x1 != x0 else 0.5
     return float(T[j - 1] + np.clip(w, 0, 1) * (T[j] - T[j - 1]))
+
+
+def _first_cross(T: np.ndarray, X: np.ndarray, level: float) -> float:
+    """단조 증가 X 가 level 을 처음 넘는 T (선형 보간)."""
+    j = np.flatnonzero(X >= level)
+    if not len(j) or j[0] == 0:
+        return np.nan
+    j = j[0]
+    return float(np.interp(level, [X[j - 1], X[j]], [T[j - 1], T[j]])) if X[j] > X[j - 1] else float(T[j])
+
+
+def transition_point(T: np.ndarray, A: np.ndarray, level: float = 0.5, K: float = 3.0,
+                     n_end: int = 10, iters: int = 8) -> dict:
+    """계단 모양 신호 A(T) 의 전이점 — 데이터가 정하는 창만 써서 바깥 아웃라이어·드리프트·범위 선택에 둔감.
+
+    1) 처음/끝 n_end 중앙값으로 대략 정규화 → isotonic(단조) 회귀 = 누적 곡선.
+       그 0.5 지점 = 중심 c, 0.25–0.75 지점 사이 = 폭 w
+    2) 창 [c − K·w, c + K·w]. 바깥 꼬리 [c ± 1.5w … c ± K·w] 에 Theil–Sen 직선 → 전·후 배경 (국소 정규화)
+    3) 코어 |T − c| ≤ w 의 정규화값을 직선 회귀 → level 교차 = T50 (오차 = x절편 표준오차)
+    4) 새 c, w 로 2–3 반복 (수렴까지)
+    창 크기는 전이 폭에 비례 (K=3 이면 시그모이드의 ~0.1 %–99.9 %) → 사람이 정한 범위가 아님.
+    반환: T50, err, width(ΔT₂₅₋₇₅), a0/a1 (T50 에서의 전·후 배경값), window, ok."""
+    out = dict(T50=np.nan, err=np.nan, width=np.nan, a0=np.nan, a1=np.nan,
+               window=(np.nan, np.nan), n_core=0, ok=False)
+    m = np.isfinite(T) & np.isfinite(A)
+    if m.sum() < 4 * n_end:
+        return out
+    o = np.argsort(T[m], kind="stable")
+    T, A = T[m][o], A[m][o]
+    a0, a1 = np.median(A[:n_end]), np.median(A[-n_end:])
+    if a1 == a0:
+        return out
+    Xi = isotonic_regression((A - a0) / (a1 - a0)).x
+    c = _first_cross(T, Xi, level)
+    w = _first_cross(T, Xi, 0.75) - _first_cross(T, Xi, 0.25)
+    if not (np.isfinite(c) and np.isfinite(w)):
+        return out
+    dT = float(np.median(np.diff(T))) or 1e-6
+    for _ in range(iters):
+        w = max(w, 3 * dT)                                  # 코어에 최소 몇 프레임은 들어오게
+        pre = (T >= c - K * w) & (T <= c - 1.5 * w)
+        post = (T >= c + 1.5 * w) & (T <= c + K * w)
+        core = np.abs(T - c) <= w
+        if pre.sum() < 3 or post.sum() < 3 or core.sum() < 3:
+            return out
+        sp, ip = theilslopes(A[pre], T[pre])[:2]
+        sq, iq = theilslopes(A[post], T[post])[:2]
+        Xl = (A - (ip + sp * T)) / ((iq + sq * T) - (ip + sp * T))
+        lr = linregress(T[core], Xl[core])
+        if not lr.slope > 0:
+            return out
+        c_new = (level - lr.intercept) / lr.slope
+        win = (T >= c - K * w) & (T <= c + K * w)
+        Xw = isotonic_regression(Xl[win]).x
+        t25, t75 = _first_cross(T[win], Xw, 0.25), _first_cross(T[win], Xw, 0.75)
+        w_new = t75 - t25
+        tc = T[core]
+        s = np.sqrt(np.sum((Xl[core] - lr.intercept - lr.slope * tc) ** 2) / max(len(tc) - 2, 1))
+        err = s / lr.slope * np.sqrt(1 / len(tc) + (c_new - tc.mean()) ** 2 / np.sum((tc - tc.mean()) ** 2))
+        out = dict(T50=float(c_new), err=float(err), width=float(w_new) if np.isfinite(w_new) else float(w),
+                   t25=float(t25), t75=float(t75),
+                   a0=float(ip + sp * c_new), a1=float(iq + sq * c_new), pre=(sp, ip), post=(sq, iq),
+                   window=(float(c - K * w), float(c + K * w)), n_core=int(core.sum()), ok=True)
+        done = abs(c_new - c) < 0.05 and (not np.isfinite(w_new) or abs(w_new - w) < 0.05)
+        c, w = c_new, (w_new if np.isfinite(w_new) else w)
+        if done:
+            break
+    return out
+
+
+def normalize_step(T: np.ndarray, A: np.ndarray, tp: dict) -> np.ndarray:
+    """transition_point 의 전·후 배경 직선으로 정규화: X = (A − 전(T)) / (후(T) − 전(T)).
+    창 밖에서는 배경을 창 끝 값으로 고정 (직선을 멀리 외삽하지 않음)."""
+    Tc = np.clip(T, *tp["window"])
+    (sp, ip), (sq, iq) = tp["pre"], tp["post"]
+    lo, hi = ip + sp * Tc, iq + sq * Tc
+    with np.errstate(all="ignore"):
+        return (A - lo) / (hi - lo)
 
 
 def _crossings(area: np.ndarray, block: np.ndarray, opt: TrackOptions) -> list[tuple[str, int]]:

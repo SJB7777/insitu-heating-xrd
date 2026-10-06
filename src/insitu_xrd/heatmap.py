@@ -21,7 +21,7 @@ import pandas as pd
 from matplotlib.colors import LogNorm
 from tqdm.auto import tqdm
 
-from .config import ATTR, CACHE_DIR, DEFAULT_FOLDER, DSET, out_dir
+from .config import ATTR, CACHE_DIR, CACHE_MODE, CACHE_MODES, DEFAULT_FOLDER, DSET, out_dir, saving
 from .geometry import FArray, Geometry
 from .integrate import ProfileOptions, RadialIntegrator
 from .io import list_files, load_image, read_frame
@@ -50,7 +50,7 @@ class Config:
     plot: PlotOptions = PlotOptions()
     temp_log: Path | Sequence[Path] | None = None   # 온도 로그 CSV (여러 개면 합침, 없으면 온도 생략)
     at: tuple[float | str, ...] = ()          # 표시할 시각: 숫자=첫 프레임 기준 상대시간(time_unit), 'HH:MM:SS'=KST 시각
-    cache: bool = True                        # out/cache 의 적분 결과 재사용
+    cache: str | None = None                  # use / refresh / off (None = 전역: --cache · 환경변수 · toml)
 
 
 # ═════════════════════════════ 프레임 로딩 (병렬) ═════════════════════════════
@@ -78,50 +78,103 @@ def _process(path: Path) -> tuple[float, FArray] | str:
 
 
 def _integrate(files: Sequence[Path], cfg: Config, shape: tuple[int, int]):
-    """파일들 → (시각[n], 프로파일[n, 2θ], 파일명[n]), 시간순."""
+    """파일들 → (시각[n], 프로파일[n, 2θ], 파일명[n]), 시간순. 몇 개뿐이면 프로세스 없이 바로."""
     workers = cfg.workers or min(8, os.cpu_count() or 1)
     times, profs, names = [], [], []
-    with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(cfg, shape)) as pool:
-        it = pool.map(_process, files, chunksize=max(1, min(16, len(files) // (4 * workers))))
+
+    def collect(it):
         for p, r in tqdm(zip(files, it), total=len(files), desc="📡 적분", unit="frame",
-                         colour="cyan", dynamic_ncols=True):
+                         colour="cyan", dynamic_ncols=True, disable=len(files) < 16):
             if isinstance(r, str):
                 tqdm.write(f"⚠️  {r}")
                 continue
             times.append(r[0])
             profs.append(r[1])
             names.append(p.name)
+
+    if len(files) < 16:
+        _init_worker(cfg, shape)
+        collect(map(_process, files))
+    else:
+        with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(cfg, shape)) as pool:
+            collect(pool.map(_process, files, chunksize=max(1, min(16, len(files) // (4 * workers)))))
+    if not times:
+        return np.empty(0), np.empty((0, 0)), np.empty(0, str)
     order = np.argsort(times, kind="stable")
     return np.asarray(times)[order], np.vstack(profs)[order], np.asarray(names)[order]
 
 
-def _cache_file(cfg: Config, files: Sequence[Path]) -> Path:
-    """폴더 내용(파일 수·수정시각 합) + 기하 + 적분 옵션 → 캐시 파일 이름."""
-    mtimes = {e.name: e.stat().st_mtime for e in os.scandir(cfg.folder)}   # Windows 는 stat 이 공짜
+def _cache_file(cfg: Config) -> Path:
+    """폴더 · 기하 · 적분 옵션 → 캐시 파일 이름. 파일 목록 · 수정시각은 캐시 안에 저장해 두고 비교
+    (새 파일만 늘었으면 그것만 적분해서 이어 붙임 → 측정 중에 다시 돌려도 빠름)."""
     g = cfg.geometry
-    sig = json.dumps([str(cfg.folder), len(files), round(sum(mtimes.get(f.name, 0) for f in files), 3),
-                      [g.pixel, g.sdd, g.xc, g.yc, g.alpha_deg, g.energy_kev],
+    sig = json.dumps([str(cfg.folder), cfg.pattern, [g.pixel, g.sdd, g.xc, g.yc, g.alpha_deg, g.energy_kev],
                       asdict(cfg.profile), cfg.dset, cfg.attr], default=str)
     return CACHE_DIR / f"{cfg.folder.name}_{hashlib.md5(sig.encode()).hexdigest()[:10]}.npz"
 
 
+def _mtimes(cfg: Config, files: Sequence[Path]) -> np.ndarray:
+    mt = {e.name: e.stat().st_mtime for e in os.scandir(cfg.folder)}       # Windows 는 stat 이 공짜
+    return np.array([mt.get(f.name, 0.0) for f in files])
+
+
+_cache_mode = CACHE_MODE          # 명령의 --cache 로 바꿈 (set_cache_mode)
+
+
+def set_cache_mode(mode: str | None) -> None:
+    """이번 실행 전체의 캐시 방식: use / refresh / off (None 이면 그대로)."""
+    global _cache_mode
+    if mode is None:
+        return
+    if mode not in CACHE_MODES:
+        raise SystemExit(f"❌ --cache {mode}: {' / '.join(CACHE_MODES)} 중 하나")
+    _cache_mode = mode
+    if mode != "use":
+        tqdm.write(f"🗂️  캐시: {mode} ({'다시 적분해서 덮어씀' if mode == 'refresh' else '읽지도 쓰지도 않음'})")
+
+
 def integrate_folder(cfg: Config) -> tuple[FArray, FArray, FArray, np.ndarray]:
-    """폴더 → (2θ, 세기[frame, 2θ], 촬영시각 Unix[frame], 파일명[frame]). 캐시 사용."""
+    """폴더 → (2θ, 세기[frame, 2θ], 촬영시각 Unix[frame], 파일명[frame]). 캐시 방식은 cfg.cache 또는 전역."""
+    mode = cfg.cache or _cache_mode
     files = list_files(cfg.folder, cfg.pattern)
-    cache = _cache_file(cfg, files)
-    if cfg.cache and cache.exists():
-        d = np.load(cache, allow_pickle=False)
-        tqdm.write(f"📂 {cfg.folder}  ({len(files)} files)  ↺ 캐시 {cache.name}")
-        return d["tth"], d["intensity"], d["time_unix"], d["files"]
+    cache = _cache_file(cfg)
+    mt = _mtimes(cfg, files)
+    if mode == "use" and cache.exists():
+        d = dict(np.load(cache, allow_pickle=False))
+        old = dict(zip(d["all_files"], d["all_mtimes"])) if "all_files" in d else {}
+        now = dict(zip((f.name for f in files), mt))
+        if old and all(now.get(k) == v for k, v in old.items()):          # 지운 · 덮어쓴 파일 없음
+            new = [f for f in files if f.name not in old]                  # 새 파일 + 지난번 읽기 실패
+            if not new:
+                tqdm.write(f"📂 {cfg.folder}  ({len(files)} files)  ↺ 캐시 {cache.name}")
+                return d["tth"], d["intensity"], d["time_unix"], d["files"]
+            tqdm.write(f"📂 {cfg.folder}  ({len(files)} files)  ↺ 캐시 + 새 파일 {len(new)} 개 적분")
+            t1, Z1, n1 = _integrate(new, cfg, load_image(new[0], cfg.dset).shape)
+            t = np.concatenate([d["time_unix"], t1])
+            order = np.argsort(t, kind="stable")
+            Z = np.vstack([d["intensity"], Z1]) if len(t1) else d["intensity"]
+            res = (d["tth"], Z[order], t[order], np.concatenate([d["files"], n1])[order])
+            np.savez_compressed(cache, tth=res[0], intensity=res[1], time_unix=res[2], files=res[3],
+                                all_files=res[3], all_mtimes=np.array([now[k] for k in res[3]]))
+            return res
     shape = load_image(files[0], cfg.dset).shape
     workers = cfg.workers or min(8, os.cpu_count() or 1)
     x = RadialIntegrator.build(cfg.geometry, cfg.profile, shape).centers
     tqdm.write(f"📂 {cfg.folder}  ({len(files)} files, {shape[0]}×{shape[1]}, "
                f"2θ {x[0]:.2f}–{x[-1]:.2f}°, workers={workers})")
     t, Z, names = _integrate(files, cfg, shape)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(cache, tth=x, intensity=Z, time_unix=t, files=names)
+    if mode != "off":
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        now = dict(zip((f.name for f in files), mt))           # 읽기 실패한 파일(쓰는 중 등)은 다음에 다시
+        np.savez_compressed(cache, tth=x, intensity=Z, time_unix=t, files=names,
+                            all_files=names, all_mtimes=np.array([now[k] for k in names]))
     return x, Z, t, names
+
+
+def cache_files(match: str | None = None) -> list[Path]:
+    """out/cache 의 캐시 파일 (match 가 있으면 폴더 이름에 그 글자가 들어간 것만)."""
+    fs = sorted(CACHE_DIR.glob("*.npz")) if CACHE_DIR.exists() else []
+    return [f for f in fs if match is None or match.lower() in f.stem.rsplit("_", 1)[0].lower()]
 
 
 # ═════════════════════════════ 공용 도우미 ═════════════════════════════
@@ -232,7 +285,7 @@ def plot(res: HeatmapResult, cfg: Config) -> plt.Figure:
         ax.plot(fr["temp_sv"], trel, lw=0.8, ls="--", label="SV")
         ax.set(xlabel="T (°C)", title="temperature")
         ax.tick_params(labelleft=False)
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=9)
         ax.grid(alpha=0.3)
 
     # 시간 평균 + 선택 시각 프로파일
@@ -245,7 +298,7 @@ def plot(res: HeatmapResult, cfg: Config) -> plt.Figure:
         for ax in axes[:-1]:
             ax.axhline(trel[i], color=c, lw=0.8, ls=":")
     ax_prof.set(xlabel="2θ (deg)", ylabel="mean intensity", title="profiles")
-    ax_prof.legend(fontsize=7)
+    ax_prof.legend(fontsize=9)
     ax_prof.grid(alpha=0.3)
 
     fig.tight_layout()
@@ -278,8 +331,11 @@ def run(cfg: Config = Config()) -> HeatmapResult:
         sel = res.frames.iloc[[res.nearest(t) for t in cfg.at]][cols]
         tqdm.write("\n📍 선택 시각\n" + sel.round(3).to_string(index=False))
 
-    stem = out_dir(cfg.folder.name) / f"{cfg.folder.name}_tth_heatmap"
     fig = plot(res, cfg)
+    if cfg.plot.show and not saving():
+        plt.show()
+        return res
+    stem = out_dir(cfg.folder.name) / f"{cfg.folder.name}_tth_heatmap"
     fig.savefig(stem.with_suffix(".png"), dpi=150)
     np.savez(stem.with_suffix(".npz"), tth=res.tth, q=cfg.geometry.tth_to_q(res.tth),
              time_rel=res.trel, time_unit=res.time_unit, intensity=res.intensity,

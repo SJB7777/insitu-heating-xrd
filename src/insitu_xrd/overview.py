@@ -13,7 +13,7 @@ from matplotlib.ticker import AutoMinorLocator, FuncFormatter, Locator, NullLoca
 
 from . import segments as sg
 from . import tracks as tk
-from .config import out_dir
+from .config import out_dir, saving
 from .heatmap import (Config, HeatmapResult, beam_ok, color_range, compute, intensity_label, regrid,
                       time_mean)
 from .style import KIND_LS, ORIGIN_RC, SEG_COLOR, TRACK_COLORS
@@ -174,11 +174,11 @@ def _temp_ticks(ax, trel: np.ndarray, unit: str, t0: float, scale: float,
     sec.xaxis.set_major_locator(loc)
     sec.xaxis.set_major_formatter(FuncFormatter(label))
     sec.xaxis.set_minor_locator(NullLocator())
-    sec.tick_params(labelsize=8.5 if top else 9, length=4, width=1.0, direction="in", pad=3)
+    sec.tick_params(labelsize=10.5 if top else 9, length=4, width=1.0, direction="in", pad=3)
     update()
     ax.callbacks.connect("xlim_changed", update)
     host.text(-0.045, 1.06 if top else -0.035, "T (°C)", transform=host.transAxes, ha="right",
-              va="bottom" if top else "top", fontsize=9, fontweight="bold")
+              va="bottom" if top else "top", fontsize=11, fontweight="bold")
 
 
 def frame_breaks(fr: pd.DataFrame) -> np.ndarray:
@@ -221,7 +221,7 @@ def _peak_tags(ax_h, tracks: list[tk.Track]) -> None:
     for i, (tr, y) in enumerate(zip(tracks, ys)):
         c = TRACK_COLORS[i % len(TRACK_COLORS)]
         ax_h.annotate(tr.name, xy=(1.0, tr.center), xycoords=tr_, xytext=(1.035, y), textcoords=tr_,
-                      ha="left", va="center", fontsize=10, fontweight="bold", color=c,
+                      ha="left", va="center", fontsize=12.5, fontweight="bold", color=c,
                       annotation_clip=False,
                       arrowprops=dict(arrowstyle="-", color=c, lw=1.5, shrinkA=0, shrinkB=0))
 
@@ -264,14 +264,14 @@ def _plot_tracks(ax_h, ax_k, ax_v, trel, tracks: list[tk.Track], temp, kinds, br
     for ax in (ax_k, ax_v):      # 전이 기준선 (정규화 면적 = 0.5)
         ax.axhline(level, color="0.25", lw=1.0, ls=(0, (5, 3)), zorder=1)
     ax_k.text(1.005, level, f"{level:g}", transform=ax_k.get_yaxis_transform(), va="center",
-              ha="left", fontsize=9, color="0.25")
-    leg_kw = dict(fontsize=9, frameon=True, framealpha=0.88, edgecolor="0.6", fancybox=False)
+              ha="left", fontsize=11, color="0.25")
+    leg_kw = dict(fontsize=11, frameon=True, framealpha=0.88, edgecolor="0.6", fancybox=False)
     if tracks:
         kw = dict(handles=handles, handlelength=1.8, title=f"peaks  (▲ area crosses {level:g} up, ▼ down)",
-                  title_fontproperties={"weight": "bold", "size": 9.5})
+                  title_fontproperties={"weight": "bold", "size": 12})
         if ax_leg is not None:      # 아래 칸 (전이 온도 상자 오른쪽) 에 꽉 차게
             ax_leg.set_axis_off()
-            ax_leg.legend(loc="center", ncol=1, borderpad=0.9, labelspacing=0.7,
+            ax_leg.legend(loc="center left", bbox_to_anchor=(0.04, 0.5), ncol=1, borderpad=0.9, labelspacing=0.7,
                           **kw, **{**leg_kw, "fontsize": 10})
         else:
             ax_k.legend(loc="upper center", bbox_to_anchor=(0.5, -0.3), ncol=min(len(handles), 3),
@@ -279,19 +279,54 @@ def _plot_tracks(ax_h, ax_k, ax_v, trel, tracks: list[tk.Track], temp, kinds, br
     ax_v.set_xlabel("T (°C)")
     ax_v.set_ylabel("Peak area (norm.)")
     ax_v.axhline(0, color="0.6", lw=0.8)
-    ax_v.set_title("Peak area vs temperature", fontsize=12, fontweight="bold", loc="left")
+    ax_v.set_title("Peak area vs temperature", fontsize=15, fontweight="bold", loc="left")
     styles = [Line2D([], [], color="0.3", ls=ls, label=lab) for lab, ls in
               (("heating", "-"), ("cooling", "--"), ("hold", ":"))]
     if ax_sty is not None:      # 아래 칸: 선 모양 뜻만 (피크 색·전이 온도는 왼쪽 아래 범례에 있음)
         ax_sty.set_axis_off()
         ax_sty.legend(handles=styles, loc="upper left", ncol=3, handlelength=2.4,
-                      title="Peak area vs T: line style", title_fontproperties={"weight": "bold", "size": 9.5},
+                      title="Peak area vs T: line style", title_fontproperties={"weight": "bold", "size": 12},
                       **{**leg_kw, "fontsize": 10})
     else:                       # 그래프 오른쪽 바깥: 피크(전이 온도) + 선 모양 뜻
         ax_v.legend(handles=handles + [Line2D([], [], ls="none", label="")] + styles,
                     loc="upper left", bbox_to_anchor=(1.02, 1.0), handlelength=2.2,
-                    title="peak · transition T", title_fontproperties={"weight": "bold", "size": 9.5},
+                    title="peak · transition T", title_fontproperties={"weight": "bold", "size": 12},
                     **leg_kw)
+
+
+def fwhm_series(summary: dict | None, tracks: list[tk.Track] | None) -> list[tuple[str, str, np.ndarray]]:
+    """[(피크 이름, 색, 프레임별 FWHM)] — experiments.toml [peaks] 의 피크. 색은 같은 이름의 추적 피크와 같게."""
+    if not summary or not summary.get("fwhm"):
+        return []
+    names = [tr.name for tr in tracks or []]
+    out = []
+    for j, (pk, w) in enumerate(summary["fwhm"].items()):
+        if not np.isfinite(w).any():
+            continue
+        i = names.index(pk) if pk in names else len(names) + j
+        out.append((pk, TRACK_COLORS[i % len(TRACK_COLORS)], w))
+    return out
+
+
+def _plot_fwhm(ax_w, ax_wt, trel, series, temp, kinds, breaks, unit) -> None:
+    """FWHM vs 시간 (점 + 이동 중앙값) / FWHM vs 온도 (승온 실선 · 하온 점선)."""
+    from .compare import smooth
+    for pk, c, w in series:
+        s = smooth(w)
+        last = np.nanmedian(w[np.isfinite(w)][-10:])
+        ax_w.plot(trel, w, "o", color=c, ms=2.5, alpha=0.3, mew=0)
+        ax_w.plot(trel, np.where(breaks, np.nan, s), color=c, lw=1.8, label=f"{pk}  {last:.2f}° (end)")
+        if ax_wt is not None:
+            for a, b in _runs(kinds):
+                ax_wt.plot(temp[a:b], s[a:b], color=c, lw=1.5, ls=KIND_LS.get(kinds[a], "-"))
+    ax_w.set_ylabel("FWHM (°)")
+    ax_w.set_xlabel(f"Time ({unit})", fontsize=14, labelpad=1)
+    ax_w.legend(loc="upper right", fontsize=11, frameon=True, framealpha=0.85, edgecolor="0.6",
+                title="per-frame Gaussian fit", title_fontsize=11)
+    if ax_wt is not None:
+        ax_wt.set_xlabel("T (°C)")
+        ax_wt.set_ylabel("FWHM (°)")
+        ax_wt.set_title("FWHM vs temperature", fontsize=15, fontweight="bold", loc="left")
 
 
 def _draw_transition_box(ax, summary: dict | None, header: str = "") -> None:
@@ -305,23 +340,26 @@ def _draw_transition_box(ax, summary: dict | None, header: str = "") -> None:
                                 clip_on=False))
     if header:
         ax.text(0.04, 0.92, header, transform=ax.transAxes, ha="left", va="top",
-                fontsize=11.5, fontweight="bold", color="0.1")
+                fontsize=14.5, fontweight="bold", color="0.1")
     ax.text(0.04, 0.92 - (0.17 if header else 0), summary["title"], transform=ax.transAxes,
-            ha="left", va="top", fontsize=9.5, color="0.35")
+            ha="left", va="top", fontsize=12, color="0.35")
     rows = summary["rows"]
     top = 0.52 if header else 0.62
     if not summary["ok"]:
         ax.text(0.5, top - 0.15, summary["msg"], transform=ax.transAxes, ha="center", va="center",
-                fontsize=10.5, color="#b00020", wrap=True)
+                fontsize=13, color="#b00020", wrap=True)
         return
     ys = np.linspace(top, 0.16, len(rows)) if len(rows) > 1 else [(top + 0.16) / 2]
-    for (pk, t50, c, fwhm), y in zip(rows, ys):
-        ax.text(0.04, y, pk, transform=ax.transAxes, ha="left", va="center", fontsize=17,
+    iso = summary.get("unit") == "min"                 # 등온 모드: t50 [min] + n · k
+    sides = summary.get("sides") or [f"{c:.2f}°\nFWHM {fwhm:.2f}°" for _, _, c, fwhm in rows]
+    for (pk, t50, c, fwhm), side, y in zip(rows, sides, ys):
+        ax.text(0.04, y, pk, transform=ax.transAxes, ha="left", va="center", fontsize=21,
                 fontweight="bold", color="0.1")
-        ax.text(0.34, y, f"{t50:.0f} °C" if np.isfinite(t50) else "–", transform=ax.transAxes,
-                ha="left", va="center", fontsize=22, fontweight="bold", color="#b00020")
-        ax.text(0.73, y, f"{c:.2f}°\nFWHM {fwhm:.2f}°", transform=ax.transAxes, ha="left",
-                va="center", fontsize=9, color="0.35", linespacing=1.2)
+        val = (f"{t50:.1f} min" if iso else f"{t50:.0f} °C") if np.isfinite(t50) else "–"
+        ax.text(0.30, y, val, transform=ax.transAxes,
+                ha="left", va="center", fontsize=27.5, fontweight="bold", color="#b00020")
+        ax.text(0.97, y, side, transform=ax.transAxes, ha="right",
+                va="center", fontsize=11, color="0.35", linespacing=1.2)
 
 
 def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = None,
@@ -340,36 +378,47 @@ def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = No
 
     with plt.rc_context(ORIGIN_RC):
         has_tr = tracks is not None
+        fw = fwhm_series(summary, tracks)
+        has_w = bool(fw)
         has_foot = has_tr or bool(summary)
-        # 행: [구간 라벨 | 온도 | (온도 숫자 줄) | 히트맵 | 여백 | 피크 면적 | 여백 | 아래 칸],
+        # 행: [구간 라벨 | 온도 | (온도 숫자 줄) | 히트맵 | 여백 | 피크 면적 | 여백 | FWHM | 여백 | 아래 칸],
         #     아래 칸 = [전이 온도 상자 | 피크 범례]  ← 왼쪽 아래만 잘라 써도 다 보이게
-        # 열: [본 그래프 | 피크 이름 | 컬러바 | 여백 | 경계 프로파일 / 면적 vs 온도]
-        hr = [0.42, 0.62, 0.17, 1] + ([0.3, 0.62] if has_tr else []) + ([0.24, 0.62] if has_foot else [])
-        r_k, r_f = 5, len(hr) - 1          # 피크 면적 줄, 아래 칸 줄
+        # 열: [본 그래프 | 피크 이름 | 컬러바 | 여백 | 경계 프로파일 / 면적 vs 온도 / FWHM vs 온도]
+        # FWHM 은 맨 위 (왼쪽 아래 = 피크 면적 · 전이 온도 상자 스크린샷 구역을 가리지 않게)
+        o = 2 if has_w else 0                         # FWHM 줄 + 여백만큼 아래로 밀림
+        hr = (([0.5, 0.2] if has_w else []) + [0.42, 0.62, 0.17, 1] + ([0.3, 0.62] if has_tr else [])
+              + ([0.24, 0.62] if has_foot else []))
+        r_w = 0                                       # FWHM 줄
+        r_k = o + 5                                   # 피크 면적 줄
+        r_f = len(hr) - 1                             # 아래 칸 줄
+        extra_h = (2.2 if has_foot else 0) + (2.0 if has_w else 0)
         if split:
-            fig = plt.figure(figsize=(12, (11.5 if has_tr else 8) + (2.2 if has_foot else 0)))
+            fig = plt.figure(figsize=(12, (11.5 if has_tr else 8) + extra_h))
             gs = fig.add_gridspec(len(hr), 3, height_ratios=hr, width_ratios=[1, 0.12, 0.022],
                                   hspace=0.0, wspace=0.0)
-            fig2 = plt.figure(figsize=(7.5, 10 if has_tr else 7))
-            gs2 = fig2.add_gridspec(3 if has_tr else 1, 1,
-                                    height_ratios=[1, 0.28, 0.75] if has_tr else [1], hspace=0.0)
+            r2 = [1] + ([0.28, 0.75] if has_tr else []) + ([0.28, 0.6] if has_w else [])
+            fig2 = plt.figure(figsize=(7.5, 7 + (3 if has_tr else 0) + (2.4 if has_w else 0)))
+            gs2 = fig2.add_gridspec(len(r2), 1, height_ratios=r2, hspace=0.0)
             ax_p = fig2.add_subplot(gs2[0, 0])
             ax_v = fig2.add_subplot(gs2[2, 0]) if has_tr else None
+            ax_wt = fig2.add_subplot(gs2[len(r2) - 1, 0]) if has_w else None
         else:
-            fig = fig2 = plt.figure(figsize=(15.5, (13.5 if has_tr else 9) + (2.2 if has_foot else 0)))
+            fig = fig2 = plt.figure(figsize=(15.5, (13.5 if has_tr else 9) + extra_h))
             gs = fig.add_gridspec(len(hr), 5, height_ratios=hr,
-                                  width_ratios=[1, 0.12, 0.022, 0.15, 0.5], hspace=0.0, wspace=0.0)
-            ax_p = fig.add_subplot(gs[1:4, 4])
+                                  width_ratios=[1, 0.12, 0.022, 0.24, 0.5], hspace=0.0, wspace=0.0)
+            ax_p = fig.add_subplot(gs[o + 1:o + 4, 4])
             ax_v = fig.add_subplot(gs[r_k, 4]) if has_tr else None
-        ax_h = fig.add_subplot(gs[3, 0])
-        ax_t = fig.add_subplot(gs[1, 0], sharex=ax_h)
-        ax_l = fig.add_subplot(gs[0, 0], sharex=ax_h)
-        cax = fig.add_subplot(gs[3, 2])
+            ax_wt = fig.add_subplot(gs[r_w, 4]) if has_w else None
+        ax_h = fig.add_subplot(gs[o + 3, 0])
+        ax_t = fig.add_subplot(gs[o + 1, 0], sharex=ax_h)
+        ax_l = fig.add_subplot(gs[o + 0, 0], sharex=ax_h)
+        cax = fig.add_subplot(gs[o + 3, 2])
         ax_k = fig.add_subplot(gs[r_k, 0], sharex=ax_h) if has_tr else None
+        ax_w = fig.add_subplot(gs[r_w, 0], sharex=ax_h) if has_w else None
         ax_l.set_axis_off()
         ax_leg = None
         if has_foot:
-            foot = gs[r_f, 0].subgridspec(1, 2, width_ratios=[0.46, 0.54], wspace=0.05)
+            foot = gs[r_f, 0].subgridspec(1, 2, width_ratios=[0.52, 0.48], wspace=0.05)
             ax_s = fig.add_subplot(foot[0, 0])
             ax_leg = fig.add_subplot(foot[0, 1]) if has_tr else None
             _draw_transition_box(ax_s, summary,
@@ -389,15 +438,15 @@ def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = No
             lo, hi = np.nanmin(vals), np.nanmax(vals)
             pad = 0.1 * (hi - lo or 1)
             ax_t.set_ylim(lo - pad, hi + pad)
-            ax_t.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=9.5, frameon=False,
+            ax_t.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=12, frameon=False,
                         handlelength=1.8)
         elif "temp_pv" in fr and fr["temp_pv"].notna().any():
             ax_t.plot(trel, fr["temp_pv"], color="black", label="PV")
             ax_t.plot(trel, fr["temp_sv"], color="red", ls="--", lw=1.5, label="SV")
-            ax_t.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=9.5, frameon=False)
+            ax_t.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=12, frameon=False)
         else:
             ax_t.text(0.5, 0.5, "no temperature log in range", transform=ax_t.transAxes,
-                      ha="center", va="center", fontsize=11, color="0.4")
+                      ha="center", va="center", fontsize=14, color="0.4")
         ax_t.set_ylabel("T (°C)")
         ax_t.tick_params(labelbottom=False)
         ax_t.set_xlim(trel[0], trel[-1])
@@ -416,23 +465,27 @@ def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = No
         for i in gaps:
             ax_h.text(rel((t_unix[i] + t_unix[i + 1]) / 2), 0.5, "no images",
                       transform=ax_h.get_xaxis_transform(), ha="center", va="center",
-                      fontsize=11, color="0.35", style="italic")
+                      fontsize=14, color="0.35", style="italic")
 
         cb = fig.colorbar(mesh, cax=cax)
         cb.set_label(intensity_label(cfg, scaled), fontweight="bold")
         cb.outline.set_linewidth(1.5)
         cax.tick_params(direction="in", width=1.5, which="both")
 
-        for ax in (ax_t, ax_h, ax_k, ax_v):
+        for ax in (ax_t, ax_h, ax_k, ax_v, ax_w, ax_wt):
             if ax is not None:
                 ax.xaxis.set_minor_locator(AutoMinorLocator(2))
                 ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        temps, kinds, breaks = frame_temps(fr, det), frame_kinds(fr, segs), frame_breaks(fr)
         if has_tr:
-            _plot_tracks(ax_h, ax_k, ax_v, trel, tracks, frame_temps(fr, det),
-                         frame_kinds(fr, segs), frame_breaks(fr), res.time_unit, ax_leg=ax_leg,
-                         ax_sty=ax_sty)
-            for i in gaps:
-                ax_k.axvspan(trel[i], trel[i + 1], color="0.88", lw=0, zorder=0)
+            _plot_tracks(ax_h, ax_k, ax_v, trel, tracks, temps, kinds, breaks, res.time_unit,
+                         ax_leg=ax_leg, ax_sty=ax_sty)
+        if has_w:
+            _plot_fwhm(ax_w, ax_wt, trel, fw, temps, kinds, breaks, res.time_unit)
+        for ax in (ax_k, ax_w):
+            if ax is not None:
+                for i in gaps:
+                    ax.axvspan(trel[i], trel[i + 1], color="0.88", lw=0, zorder=0)
 
         # ── 구간: 온도 패널 음영 + 경계 점선(세로), 라벨은 온도 그래프 위 바깥 ──
         labels = []
@@ -441,17 +494,25 @@ def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = No
             ax_t.axvspan(x0, x1, color=SEG_COLOR[s.kind], alpha=0.12 if s.kind != "gap" else 0.5,
                          lw=0, zorder=0, hatch="//" if s.kind == "gap" else None)
             if k:   # 경계
-                for ax, c in ((ax_t, "0.2"), (ax_h, "white"), (ax_k, "0.4")):
+                for ax, c in ((ax_t, "0.2"), (ax_h, "white"), (ax_k, "0.4"), (ax_w, "0.4")):
                     if ax is not None:
                         ax.axvline(x0, color=c, ls="--", lw=1.3, zorder=5)
             lines = s.describe()
             lines[0] = f"{k + 1}. {lines[0]}"
             labels.append((s, x0, x1, "\n".join(lines), max(len(ln) for ln in lines)))
 
+        # 등온 모드: 등온 시작 / 끝 세로선 (온도 · 히트맵 · 면적 · FWHM)
+        for xm, lab in (summary or {}).get("marks", []):
+            for ax, c in ((ax_t, "#b00020"), (ax_h, "#ff5c5c"), (ax_k, "#b00020"), (ax_w, "#b00020")):
+                if ax is not None:
+                    ax.axvline(xm, color=c, ls="-.", lw=1.8, zorder=6)
+            ax_t.text(xm, 0.97, f" {lab}", transform=ax_t.get_xaxis_transform(), color="#b00020",
+                      fontsize=12, fontweight="bold", va="top", ha="left", zorder=7)
+
         # 라벨이 서로 겹치지 않게 가로 위치 조정 (구간 가운데에서 최소한만 이동)
         fs = 9.0
-        ax_w = ax_l.get_position().width * fig.get_figwidth()
-        per_char = fs * 0.6 / 72 / ax_w * (trel[-1] - trel[0])
+        lab_w_in = ax_l.get_position().width * fig.get_figwidth()
+        per_char = fs * 0.6 / 72 / lab_w_in * (trel[-1] - trel[0])
         widths = [(n + 2) * per_char for *_, n in labels]
         xs = _spread([(x0 + x1) / 2 for _, x0, x1, *_ in labels], widths, trel[0], trel[-1])
         tr = ax_l.get_xaxis_transform()
@@ -464,8 +525,8 @@ def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = No
                           linespacing=1.15, annotation_clip=False,
                           bbox=dict(boxstyle="round,pad=0.3", fc=c, ec="none", alpha=0.92),
                           arrowprops=dict(arrowstyle="-", color=c, lw=1.5, shrinkA=0, shrinkB=0))
-        ax_l.set_title(f"{cfg.folder.name}   start {fr['time_kst'].iloc[0]} KST",
-                       fontsize=13, fontweight="bold", loc="left", pad=4)
+        (ax_w if has_w else ax_l).set_title(f"{cfg.folder.name}   start {fr['time_kst'].iloc[0]} KST",
+                                            fontsize=16, fontweight="bold", loc="left", pad=4)
 
         # ── 경계 시점 프로파일 (아래=처음, 위=나중; 색=온도) ──
         bp = _boundary_profiles(res, list(segs), det, scale)
@@ -481,14 +542,14 @@ def plot_overview(res: HeatmapResult, cfg: Config, det: sg.Detection | None = No
             if np.isfinite(T):
                 lab += f"\n{'~' if est else ''}{T:.0f} °C"
             ax_p.text(1.02, k * step + 0.1 * step, lab, transform=ax_p.get_yaxis_transform(),
-                      fontsize=9.5, color=c, va="bottom", ha="left", fontweight="bold")
+                      fontsize=12, color=c, va="bottom", ha="left", fontweight="bold")
         ax_p.set_xlabel("2θ (°)")
         ax_p.set_ylabel("Intensity (offset)")
         ax_p.set_xlim(x[0], x[-1])
         ax_p.yaxis.set_major_locator(NullLocator())
         ax_p.yaxis.set_minor_locator(NullLocator())
         ax_p.xaxis.set_minor_locator(AutoMinorLocator(2))
-        ax_p.set_title("Profiles at segment boundaries", fontsize=12, fontweight="bold", loc="left")
+        ax_p.set_title("Profiles at segment boundaries", fontsize=15, fontweight="bold", loc="left")
     return (fig, fig2) if split else fig
 
 
@@ -597,7 +658,66 @@ def transition_summary(res: HeatmapResult, cfg: Config, tracks: list[tk.Track] |
                 k = np.flatnonzero(an.use & (np.nan_to_num(Xk, nan=-1) >= st.level))
                 tr.events = [("appears", int(k[0]))] if len(k) else []
     return {"title": f"Transition T  (T50: X = {st.level:g}, heating)", "rows": rows, "ok": an.ok,
-            "msg": an.msg or "", "level": st.level}
+            "msg": an.msg or "", "level": st.level,
+            "fwhm": an.fwhm, "center": an.center}       # 프레임별 (피크 없는 프레임 NaN)
+
+
+def iso_summary(res: HeatmapResult, cfg: Config, tracks: list[tk.Track] | None,
+                peaks_cfg: Path | None, t0: str | None = None) -> dict | None:
+    """등온 모드: avrami 와 같은 분석 (승온 → 등온 → 하온, t0 = 등온 시작) 으로 피크별 t50 · n · k.
+    transition_summary 와 같은 모양 (전이 상자 · FWHM 줄에 그대로 씀) + 등온 시작/끝 표시."""
+    if peaks_cfg is None or not Path(peaks_cfg).exists() or not cfg.temp_log:
+        return None
+    from . import avrami as av
+    from . import compare as cmp
+    from .temperature import PV
+    st = cmp.load_settings(peaks_cfg, need_exps=False)
+    t = res.t_unix
+    T = TempLog.load(cfg.temp_log).at(t, PV)
+    files = res.frames["file"].to_numpy(str)
+    run = av.IsoRun(cmp.Experiment(name=cfg.folder.name, images=[], recipe=[]), cfg.folder.name, t0)
+    r = av.analyze_iso(run, res.tth, res.intensity, t, T, files, st)
+    print(f"\n🌡️  등온 분석 — t0 = {r.t0_src or '–'}, T_iso = {r.T_iso:.1f} °C"
+          if np.isfinite(r.T_iso) else "\n🌡️  등온 분석")
+    idx = {f: i for i, f in enumerate(files)}                       # 분석에 쓴 프레임 → 전체 프레임 위치
+    pos = np.array([idx[f] for f in r.files]) if len(r.files) else np.empty(0, int)
+
+    def full(a: np.ndarray) -> np.ndarray:
+        out = np.full(len(files), np.nan)
+        if len(pos) and len(a) == len(pos):
+            out[pos] = a
+        return out
+
+    rows, details, sides = [], [], []
+    for pk in st.peaks:
+        f = r.fits.get(pk, {})
+        c, w = f.get("center_end", np.nan), f.get("fwhm_end", np.nan)
+        rows.append((pk, f.get("t50", np.nan), c, w))
+        sides.append(f"n {f.get('n', np.nan):.2f}  k {f.get('k', np.nan):.3g}/min\nFWHM {w:.2f}°")
+        details.append(f"{pk} n {f.get('n', np.nan):.2f} · k {f.get('k', np.nan):.3g}/min")
+        print(f"   {pk:>6}: t50 {f.get('t50', np.nan):.2f} min  n {f.get('n', np.nan):.2f}  "
+              f"k {f.get('k', np.nan):.3g}/min  τ {f.get('tau', np.nan):.2f} min")
+    if tracks:                                                      # 맞는 추적 피크에 hkl 이름만
+        taken: set[int] = set()
+        for pk, _, c, _ in rows:
+            near = [(abs(tr.center - c), i) for i, tr in enumerate(tracks)
+                    if i not in taken and np.isfinite(c) and abs(tr.center - c) <= st.search]
+            if near:
+                i = min(near)[1]
+                taken.add(i)
+                tracks[i].name = pk
+    marks = []
+    hold = av.hold_range(T)
+    if np.isfinite(r.t0):
+        marks.append(((r.t0 - t[0]) / res.scale, "isothermal start" if r.t0_src == "등온 시작" else "t₀"))
+    if hold is not None and hold[1] < len(t) - 1:
+        marks.append(((t[hold[1]] - t[0]) / res.scale, "isothermal end"))
+    T_txt = f"{r.T_iso:.0f} °C" if np.isfinite(r.T_iso) else "T –"
+    return {"title": f"Isothermal {T_txt}  ·  t50 from isothermal start (X = 0.5)", "rows": rows,
+            "ok": r.ok, "msg": r.fail, "level": 0.5, "unit": "min", "details": details, "sides": sides,
+            "marks": marks,
+            "fwhm": {pk: full(w) for pk, w in r.width.items()},
+            "center": {pk: full(c) for pk, c in r.center.items()}}
 
 
 def drop_orphans(res: HeatmapResult) -> HeatmapResult:
@@ -634,7 +754,7 @@ def run(cfg: Config, seg_opt: sg.SegmentOptions | None = sg.SegmentOptions(),
         extra: Sequence[Path] = (), match: bool = True, html: bool = True,
         browser: bool = False, track_opt: tk.TrackOptions | None = tk.TrackOptions(),
         mpl: bool = False, peaks_cfg: Path | None = None, keep_orphans: bool = False,
-        auto_log: bool = True) -> HeatmapResult:
+        auto_log: bool = True, iso: bool = False, iso_t0: str | None = None) -> HeatmapResult:
     """cfg.folder (+ extra 폴더들) → overview. 여러 폴더면 결과 이름은 'a+b'.
     cfg.temp_log 가 없고 auto_log 면 시간이 맞는 온도 로그를 자동 선택.
     결과 저장 후 cfg.plot.show 면: 기본은 인터랙티브 HTML 을 브라우저로,
@@ -668,39 +788,48 @@ def run(cfg: Config, seg_opt: sg.SegmentOptions | None = sg.SegmentOptions(),
                                        "T_start", "T_end", "estimated"]].round(1).to_string(index=False))
         if det.estimated.any():
             print("   (estimated=True: 로그가 끊긴 시간의 온도를 이웃 램프 외삽으로 추정)")
-        seg_csv = d / f"{name}_segments.csv"
-        tab.to_csv(seg_csv, index=False, encoding="utf-8-sig")
-        print(f"💾 {seg_csv}")
+        if saving():
+            seg_csv = d / f"{name}_segments.csv"
+            tab.to_csv(seg_csv, index=False, encoding="utf-8-sig")
+            print(f"💾 {seg_csv}")
     tracks = None
     if track_opt is not None:
         tracks = tk.track(res.tth, res.intensity, frame_breaks(res.frames), track_opt)
-    summary = transition_summary(res, cfg, tracks, peaks_cfg)   # 맞는 트랙에 hkl 이름·T50 붙임
+    summary = (iso_summary(res, cfg, tracks, peaks_cfg, iso_t0) if iso      # 등온: t50 · n · k
+               else transition_summary(res, cfg, tracks, peaks_cfg))   # 맞는 트랙에 hkl 이름·T50 붙임
     if tracks is not None:
         ev = tk.events_table(tracks, res.frames, frame_temps(res.frames, det))
         print("\n🔎 피크 추적 (↑ 나타남 / ↓ 사라짐)\n" + ev.round(1).to_string(index=False))
-        pk_csv = d / f"{name}_peaks.csv"
-        tk.to_frames(tracks, res.frames).to_csv(pk_csv, index=False, encoding="utf-8-sig")
-        ev.to_csv(d / f"{name}_peak_events.csv", index=False, encoding="utf-8-sig")
-        print(f"💾 {pk_csv}")
+        if saving():
+            pk_csv = d / f"{name}_peaks.csv"
+            tk.to_frames(tracks, res.frames).to_csv(pk_csv, index=False, encoding="utf-8-sig")
+            ev.to_csv(d / f"{name}_peak_events.csv", index=False, encoding="utf-8-sig")
+            print(f"💾 {pk_csv}")
     if summary:
-        pd.DataFrame(summary["rows"], columns=["peak", "T50_C", "center_deg", "FWHM_deg"]).to_csv(
-            d / f"{name}_transition.csv", index=False, encoding="utf-8-sig")
+        for pk in summary["fwhm"]:
+            res.frames[f"center_{pk}"] = summary["center"][pk]
+            res.frames[f"FWHM_{pk}"] = summary["fwhm"][pk]
+        if saving():
+            pd.DataFrame(summary["rows"], columns=["peak", "t50_min" if iso else "T50_C", "center_deg", "FWHM_deg"]).to_csv(
+                d / f"{name}_transition.csv", index=False, encoding="utf-8-sig")
     scaled = len(results) > 1 and match
-    fig = plot_overview(res, cfg, det, scaled=scaled, tracks=tracks, summary=summary)
-    png = d / f"{name}_overview.png"
-    with plt.rc_context(ORIGIN_RC):
-        fig.savefig(png)
-    plt.close(fig)
-    frames_csv = d / f"{name}_frames.csv"
-    res.frames.to_csv(frames_csv, index=False, encoding="utf-8-sig")
-    print(f"\n💾 {png}\n💾 {frames_csv}")
+    if saving():
+        fig = plot_overview(res, cfg, det, scaled=scaled, tracks=tracks, summary=summary)
+        png = d / f"{name}_overview.png"
+        with plt.rc_context(ORIGIN_RC):
+            fig.savefig(png)
+        plt.close(fig)
+        frames_csv = d / f"{name}_frames.csv"
+        res.frames.to_csv(frames_csv, index=False, encoding="utf-8-sig")
+        print(f"\n💾 {png}\n💾 {frames_csv}")
     show_mpl = cfg.plot.show and mpl
     browser = browser or (cfg.plot.show and not mpl)
-    if html or browser:
+    if (html and saving()) or browser:
         from . import interactive
         page = interactive.write_html(res, cfg, det, d / f"{name}_overview.html",
                                       scaled=scaled, tracks=tracks, summary=summary)
-        print(f"💾 {page}  (인터랙티브: 브라우저로 열기)")
+        if saving():
+            print(f"💾 {page}  (인터랙티브: 브라우저로 열기)")
         if browser:
             import webbrowser
             webbrowser.open(page.resolve().as_uri())
